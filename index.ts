@@ -220,6 +220,22 @@ const card_types: CardTypes = {
          * 1 point for each card of the color the player has the most of.
          * If they have more mermaid cards, they must look at which of the other colors they have more of.
          * The same color cannot be counted for more than one mermaid card.
+         *
+         * # How the calculation is performed
+         *  1. Count the frequency of colors in all cards (except mermaids, which technically have color of "white" but are not counted toward frequency)
+         *  2. For the first mermaid, add 1 point for each card having the highest-frequency color
+         *  3. for the next n mermaids, add 1 point for each card having the nth-highest-frequency-color
+         *
+         *  # Example
+         *  Let the player have 3 mermaids, and cards as [blue, blue, blue, blue, yellow, yellow, light gray]
+         *
+         *  The first mermaid adds 4 points (from blue cards)
+         *
+         *  The next mermaid adds 2 points (from yellow cards)
+         *
+         *  The next mermaid adds 1 point (from light gray)
+         *
+         *  The total points added is 7
          */
         eval: (cards) => {
             let points = 0;
@@ -231,9 +247,6 @@ const card_types: CardTypes = {
                 effects.push('If they place 4 mermaid cards, the player immediately wins the game');
             }
 
-            // sort an array of card totals by color (excluding mermaids)
-            // for each mermaid, apply 1 point for each card of the color that has the highest count
-            // once a mermaid has been used on a color, exclude that color
             const visited_colors = new Set();
             const cards_by_color = getColorFrequency(cards.filter(({ name }) => name !== 'mermaid'))
 
@@ -348,15 +361,20 @@ const turn = (hand: Card[], played: Card[]) => {
 
     // make a calculation once per card type, at the first appearance of that card
     // if you have already calculated a card type, and you see another instance of that type, continue
-    const { state_changes } = cards.reduce((accumulator, currentValue) => {
-        if (accumulator.visited.has(currentValue.name)) {
+    const { state_changes } = cards.reduce((accumulator, { name }) => {
+        if (accumulator.visited.has(name)) {
             return accumulator;
         }
-        const card_type = card_types[currentValue.name]
 
-        const { points, effects } = card_type.eval(cards)
-        accumulator.state_changes.push({ name: currentValue.name, points, effects })
-        accumulator.visited.add(currentValue.name)
+        const { points, effects } = card_types[name].eval(cards)
+        const state_change = { name, points, effects }
+
+        if (process.env.SHOW_STATE_CHANGES === 'true') {
+            console.log(JSON.stringify(state_change, null, 2));
+        }
+
+        accumulator.state_changes.push(state_change)
+        accumulator.visited.add(name)
         return accumulator;
     }, {
         visited: new Set(), state_changes: []
@@ -364,12 +382,16 @@ const turn = (hand: Card[], played: Card[]) => {
         visited: Set<CardName>, state_changes: { name: CardName, points: number, effects: string[] }[]
     })
 
-    const { effects, points } = state_changes.reduce((acc, currVal) => {
-        for (const effect of (currVal.effects || [])) {
-            acc.effects.add(effect)
+    // Combine the effects and points from each state change
+    //  - effects are de-duplicated
+    //  - points are summed
+    //      - special case: shark/swimmer pairs emit 0.5 points from each half of a pair - summing should always result in an integer
+    const { effects, points } = state_changes.reduce((accumulator, { effects, points }) => {
+        for (const effect of (effects || [])) {
+            accumulator.effects.add(effect)
         }
-        acc.points += currVal.points
-        return acc
+        accumulator.points += points
+        return accumulator
     }, { effects: new Set(), points: 0 })
 
     if (points >= 7) {
