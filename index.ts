@@ -1,5 +1,21 @@
 import { readFileSync } from 'fs';
 import levenshtein from 'fast-levenshtein';
+import { card_names, colors } from './data.ts';
+
+type CardName = typeof card_names[number];
+
+type Color = typeof colors[number];
+
+type Card = {
+    name: CardName;
+    color: Color;
+    state: 'hand' | 'played';
+}
+
+type Eval = (cards: Card[]) => { points: number, effects: string[] };
+
+type CardTypes = Record<CardName, { eval: Eval }>
+
 
 // It can be fun to make silly intentional misspellings of the card names
 //
@@ -7,60 +23,106 @@ import levenshtein from 'fast-levenshtein';
 //  Crab => "carb"
 //
 // Allow some fuzziness when reading cards from input - take the closest match in card_types
-const getByLevenshteinDistance = (candidate, possible_values) => possible_values.reduce((accumulator, currentValue) => {
-    const d = levenshtein.get(candidate, currentValue);
-    if (d < accumulator.distance) {
-        return { value: currentValue, distance: d };
-    } else {
-        return accumulator;
+function getByLevenshteinDistance<T extends string> (candidate: string, possible_values: readonly T[]){
+    if (!possible_values?.length) {
+        throw new Error('possible_values may not be empty');
     }
-}, { value: null, distance: Infinity });
 
-// cards add points to score whether they are played or in the hand
-const getInnerTotal = ({ hand, played }) => hand + played
+    // initialize the result with the first possible value, then proceed to search the other values for a better match
+    const [first, ...rest] = possible_values;
+    const result = {
+        value: first,
+        distance: levenshtein.get(candidate, first)
+    }
 
-const colors = [
-    'white',
-    'black',
-    'red',
-    'light red',
-    'dark red',
-    'yellow',
-    'light yellow',
-    'dark yellow',
-    'blue',
-    'light blue',
-    'dark blue',
-    'orange',
-    'light orange',
-    'dark orange',
-    'green',
-    'light green',
-    'dark green',
-    'brown',
-    'light brown',
-    'dark brown',
-    'violet',
-    'light violet',
-    'dark violet',
-    'gray',
-    'dark gray',
-    'silver',
-    'gold',
-]
+    for (const r of rest) {
+        const d = levenshtein.get(candidate, r);
+        if (d < result.distance) {
+            result.value = r
+            result.distance = d
+        }
+    }
 
-const card_types = {
+    return result;
+}
+
+
+// cache this calculation which is used by both sharks and swimmers
+let sharksAndSwimmers: null | number[] = null;
+
+const getSharksAndSwimmers = (cards: Card[]) => {
+    if (sharksAndSwimmers === null) {
+        const [shark_hand, shark_played, swimmer_hand, swimmer_played] = ['shark', 'swimmer'].flatMap(
+            (i) => {
+                const { hand, played } = cards
+                    .filter(({ name }) => name === i)
+                    .reduce((accumulator, { state }) => {
+                            accumulator[state] += 1
+                            return accumulator;
+                        }, { hand: 0, played: 0 }
+                    )
+
+                return [
+                    hand,
+                    played,
+                ]
+            }
+        )
+
+        sharksAndSwimmers = [shark_hand, shark_played, swimmer_hand, swimmer_played]
+    }
+
+    return sharksAndSwimmers;
+}
+
+
+const getColorFrequency = (cards: Card[]) => cards
+    .reduce((accumulator, { color }) => {
+        if (!accumulator[color]) {
+            accumulator[color] = 0;
+        }
+        accumulator[color] += 1;
+
+        return accumulator
+    }, {} as Record<Color, number>)
+
+
+const parse_csv: (filename: string, state: 'hand' | 'played') => Card[] = (filename, state) => readFileSync(filename)
+    .toString()
+    .trimEnd()
+    .split('\n')
+    .reduce((accumulator, currentValue) => {
+        if (currentValue === '' || currentValue === undefined) {
+            return accumulator;
+        }
+        const [_name, _color] = currentValue
+            .split(',')
+            .map((i) => i.trim().toLowerCase());
+
+        const { value: name } = getByLevenshteinDistance(_name, card_names);
+        const { value: color } = getByLevenshteinDistance(_color, colors);
+
+        accumulator.push({ name, color, state });
+        return accumulator;
+    }, [] as Card[])
+
+const card_types: CardTypes = {
     // Duo cards
     crab: {
         eval: (cards) => {
             let points = 0;
             const effects = [];
 
-            const total = cards.filter(({ card_name }) => card_name === 'crab').length;
-            if (total === 2) {
-                points = 1;
+            const { hand, played } = cards.filter(({ name }) => name === 'crab').reduce((acc, { state }) => {
+                acc[state] += 1
+                return acc;
+            }, { hand: 0, played: 0 })
+
+            if (Math.floor(hand / 2)) {
                 effects.push('[If they play 2 crab cards] The player chooses a discard pile, consults it without shuffling it, and chooses a card from it to add to their hand. They do not have to show it to the other players')
             }
+
+            points += Math.floor((hand + played) / 2)
 
             return { points, effects };
         }
@@ -71,11 +133,16 @@ const card_types = {
             let points = 0;
             const effects = [];
 
-            const total = cards.filter(({ card_name }) => card_name === 'boat').length;
-            if (total === 2) {
-                points = 1;
+            const { hand, played } = cards.filter(({ name }) => name === 'boat').reduce((acc, { state }) => {
+                acc[state] += 1
+                return acc;
+            }, { hand: 0, played: 0 })
+
+            if (Math.floor(hand / 2)) {
                 effects.push('[If they play 2 boat cards] The player immediately takes another turn')
             }
+
+            points += Math.floor((hand + played) / 2)
 
             return { points, effects };
         },
@@ -86,11 +153,16 @@ const card_types = {
             let points = 0;
             const effects = [];
 
-            const total = cards.filter(({ card_name }) => card_name === 'fish').length;
-            if (total === 2) {
-                points = 1;
+            const { hand, played } = cards.filter(({ name }) => name === 'fish').reduce((acc, { state }) => {
+                acc[state] += 1
+                return acc;
+            }, { hand: 0, played: 0 })
+
+            if (Math.floor(hand / 2)) {
                 effects.push('[If they play 2 fish cards] The player adds the top card from the deck to their hand.')
             }
+
+            points += Math.floor((hand + played) / 2)
 
             return { points, effects };
         }
@@ -102,25 +174,18 @@ const card_types = {
             let points = 0;
             const effects = [];
 
-            // TODO: cache this calculation so that either can use it (you cannot skip one because ordering is not guaranteed)
-            const [sharkH, sharkP, swimmerH, swimmerP] = [
-                cards.filter(({ card_name, state }) => card_name === 'shark' && state === 'hand').length,
-                cards.filter(({ card_name, state }) => card_name === 'shark' && state === 'played').length,
-                cards.filter(({ card_name, state }) => card_name === 'swimmer' && state === 'hand').length,
-                cards.filter(({ card_name, state }) => card_name === 'swimmer' && state === 'played').length,
-            ]
+            const [shark_hand, shark_played, swimmer_hand, swimmer_played] = getSharksAndSwimmers(cards);
 
 
-            if (sharkH === 1 && swimmerH === 1) {
+            if (shark_hand >= 1 && swimmer_hand >= 1) {
                 effects.push('[If they play a pair of shark, swimmer cards] The player steals a random card from another player and adds it to their hand.')
             }
 
-            // sum of cards across hand and played
-            if (
-                [sharkH, sharkP, swimmerH, swimmerP].reduce((accumulator, currentValue) => accumulator + currentValue, 0)
-            ) {
-                points = 0.5
-            }
+            // the greatest number of pairs you can form is limited by the less frequent of the 2 card types
+            const num_pairs = Math.min((shark_hand + shark_played), (swimmer_hand + swimmer_played))
+
+            // add half of the pairs from this card type, expecting that half of the pairs will be added from the other card type
+            points += num_pairs / 2;
 
             return { points, effects };
         }
@@ -132,25 +197,18 @@ const card_types = {
             let points = 0;
             const effects = [];
 
-            // TODO: cache this calculation so that either can use it (you cannot skip one because ordering is not guaranteed)
-            const [sharkH, sharkP, swimmerH, swimmerP] = [
-                cards.filter(({ card_name, state }) => card_name === 'shark' && state === 'hand').length,
-                cards.filter(({ card_name, state }) => card_name === 'shark' && state === 'played').length,
-                cards.filter(({ card_name, state }) => card_name === 'swimmer' && state === 'hand').length,
-                cards.filter(({ card_name, state }) => card_name === 'swimmer' && state === 'played').length,
-            ]
+            const [shark_hand, shark_played, swimmer_hand, swimmer_played] = getSharksAndSwimmers(cards);
 
 
-            if (sharkH === 1 && swimmerH === 1) {
+            if (shark_hand >= 1 && swimmer_hand >= 1) {
                 effects.push('[If they play a pair of shark, swimmer cards] The player steals a random card from another player and adds it to their hand.')
             }
 
-            // sum of cards across hand and played
-            if (
-                [sharkH, sharkP, swimmerH, swimmerP].reduce((accumulator, currentValue) => accumulator + currentValue, 0)
-            ) {
-                points = 0.5
-            }
+            // the greatest number of pairs you can form is limited by the less frequent of the 2 card types
+            const num_pairs = Math.min((shark_hand + shark_played), (swimmer_hand + swimmer_played))
+
+            // add half of the pairs from this card type, expecting that half of the pairs will be added from the other card type
+            points += num_pairs / 2;
 
             return { points, effects };
         }
@@ -167,7 +225,7 @@ const card_types = {
             let points = 0;
             const effects = [];
 
-            const total = cards.filter(({ card_name }) => card_name === 'mermaid').length;
+            const total = cards.filter(({ name }) => name === 'mermaid').length;
 
             if (total === 4) {
                 effects.push('If they place 4 mermaid cards, the player immediately wins the game');
@@ -177,27 +235,19 @@ const card_types = {
             // for each mermaid, apply 1 point for each card of the color that has the highest count
             // once a mermaid has been used on a color, exclude that color
             const visited_colors = new Set();
-            const cards_by_color = cards
-                .filter(({ card_name }) => card_name !== 'mermaid')
-                .reduce((accumulator, currentValue) => {
-                    const { color } = currentValue;
-                    if (!accumulator[color]) {
-                        accumulator[color] = 0;
-                    }
-                    accumulator[color] += 1;
+            const cards_by_color = getColorFrequency(cards.filter(({ name }) => name !== 'mermaid'))
 
-                    return accumulator
-                }, {})
-
-
-            for (let i = 0; i < total; i ++) {
+            for (let i = 0; i < total; i++) {
                 for (const [color, count] of Object.entries(cards_by_color)) {
                     if (visited_colors.has(color)) {
                         continue;
                     }
 
-                    points += count as number;
+                    points += count;
                     visited_colors.add(color);
+
+                    // only apply a mermaid to one color
+                    break;
                 }
             }
 
@@ -209,8 +259,8 @@ const card_types = {
     shell: {
         eval: (cards) => {
              const scaling = [0, 2, 4, 6, 8, 10]
-             const total = cards.filter(({ card_name }) => card_name === 'shell').length;
-             const points = scaling.at(total - 1)
+             const total = cards.filter(({ name }) => name === 'shell').length;
+             const points = scaling.at(total - 1) || 0
 
             return { points, effects: [] }
         }
@@ -219,8 +269,8 @@ const card_types = {
     octopus: {
         eval: (cards) => {
             const scaling = [0, 3, 6, 9, 12]
-            const total = cards.filter(({ card_name }) => card_name === 'octopus').length;
-            const points = scaling.at(total - 1)
+            const total = cards.filter(({ name }) => name === 'octopus').length;
+            const points = scaling.at(total - 1) || 0
 
             return { points, effects: [] }
         }
@@ -229,8 +279,8 @@ const card_types = {
     penguin: {
         eval: (cards) => {
             const scaling =  [1, 3, 5]
-            const total = cards.filter(({ card_name }) => card_name === 'penguin').length;
-            const points = scaling.at(total - 1)
+            const total = cards.filter(({ name }) => name === 'penguin').length;
+            const points = scaling.at(total - 1) || 0
 
             return { points, effects: [] }
         }
@@ -239,8 +289,8 @@ const card_types = {
     sailor: {
         eval: (cards) => {
             const scaling = [0, 5]
-            const total = cards.filter(({ card_name }) => card_name === 'sailor').length;
-            const points = scaling.at(total - 1)
+            const total = cards.filter(({ name }) => name === 'sailor').length;
+            const points = scaling.at(total - 1) || 0
 
             return { points, effects: [] }
         }
@@ -250,8 +300,9 @@ const card_types = {
     // 1 point per boat
     lighthouse: {
         eval: (cards) => {
-            const total = cards.filter(({ card_name }) => card_name === 'boat').length;
-            const points = (total * 1);
+            const factor = 1
+            const total = cards.filter(({ name }) => name === 'boat').length;
+            const points = (total * factor);
 
             return { points, effects: [] }
         }
@@ -260,8 +311,9 @@ const card_types = {
     // 1 point per fish
     'shoal of fish': {
         eval: (cards) => {
-            const total = cards.filter(({ card_name }) => card_name === 'fish').length;
-            const points = (total * 1);
+            const factor = 1
+            const total = cards.filter(({ name }) => name === 'fish').length;
+            const points = (total * factor);
 
             return { points, effects: [] }
         }
@@ -270,8 +322,9 @@ const card_types = {
     // 2 points per penguin
     'penguin colony': {
         eval: (cards) => {
-            const total = cards.filter(({ card_name }) => card_name === 'penguin').length;
-            const points = (total * 2);
+            const factor = 2
+            const total = cards.filter(({ name }) => name === 'penguin').length;
+            const points = (total * factor);
 
             return { points, effects: [] }
         }
@@ -280,53 +333,36 @@ const card_types = {
     // 3 points per sailor
     'captain': {
         eval: (cards) => {
-            const total = cards.filter(({ card_name }) => card_name === 'sailor').length;
-            const points = (total * 3);
+            const factor = 3
+            const total = cards.filter(({ name }) => name === 'sailor').length;
+            const points = (total * factor);
 
             return { points, effects: [] }
         }
     },
 }
 
-const parse_csv = (filename) => readFileSync(filename)
-    .toString()
-    .trimEnd()
-    .split('\n')
-    .reduce((accumulator, currentValue) => {
-        const [_card_name, _color] = currentValue
-            .split(',')
-            .map((i) => i.trim().toLowerCase());
 
-        const { value: card_name } = getByLevenshteinDistance(_card_name, Object.keys(card_types));
-        const { value: color } = getByLevenshteinDistance(_color, colors);
-
-        accumulator.push({ card_name, color });
-        return accumulator;
-    }, [])
-
-const turn = () => {
-    const hand = parse_csv('./hand.csv').map((i) => ({ ...i, state: 'hand' }))
-    const played = parse_csv('./played.csv').map((i) => ({...i, state: 'played' }))
-
+const turn = (hand: Card[], played: Card[]) => {
     const cards = [...hand, ...played];
 
     // make a calculation once per card type, at the first appearance of that card
-    // if you have already calculated a card type and you see another instance of that type, continue
+    // if you have already calculated a card type, and you see another instance of that type, continue
     const { state_changes } = cards.reduce((accumulator, currentValue) => {
-            if (accumulator.visited.has(currentValue.card_name)) {
-                return accumulator;
-            }
-            const card_type = card_types[currentValue.card_name]
-
-            console.log(accumulator, currentValue)
-
-            const { points, effects } = card_type.eval(cards)
-            accumulator.state_changes.push({ card_name: currentValue.card_name, points, effects })
-            accumulator.visited.add(currentValue.card_name)
+        if (accumulator.visited.has(currentValue.name)) {
             return accumulator;
-        }, { visited: new Set(), state_changes: [] })
+        }
+        const card_type = card_types[currentValue.name]
 
-    console.log(state_changes);
+        const { points, effects } = card_type.eval(cards)
+        accumulator.state_changes.push({ name: currentValue.name, points, effects })
+        accumulator.visited.add(currentValue.name)
+        return accumulator;
+    }, {
+        visited: new Set(), state_changes: []
+    } as {
+        visited: Set<CardName>, state_changes: { name: CardName, points: number, effects: string[] }[]
+    })
 
     const { effects, points } = state_changes.reduce((acc, currVal) => {
         for (const effect of (currVal.effects || [])) {
@@ -340,13 +376,20 @@ const turn = () => {
         effects.add('If the player has reached 7 points or more by counting the points on their cards, both in their hand and in front of them (see Card Details), they can decide to end the round');
     }
 
+    const color_frequency = getColorFrequency(cards);
+
     return {
         effects,
-
-        // if a player has only a shark, or only a swimmer, lower their 0.5 points from that card to 0
-        points: Math.floor(points)
+        points,
+        color_frequency,
     };
 }
 
-const t = turn();
-console.log(t);
+const [hand_csv, played_csv] = process.argv.slice(2);
+
+console.log(
+    turn(
+        parse_csv(hand_csv, 'hand'),
+        parse_csv(played_csv, 'played')
+    )
+);
