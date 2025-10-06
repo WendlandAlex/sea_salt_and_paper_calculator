@@ -14,6 +14,12 @@ type Card = {
 
 type Eval = (cards: Card[]) => { points: number, effects: string[] };
 
+type EvalDuoCard = (name: string, effect: string) => Eval;
+
+type EvalCollectorCard = (name: string, scaling: number[]) => Eval;
+
+type EvalPointMultiplierCard = (name: string, factor: number) => Eval;
+
 type CardTypes = Record<CardName, { eval: Eval }>
 
 
@@ -47,29 +53,31 @@ function getByLevenshteinDistance<T extends string> (candidate: string, possible
 }
 
 
+const getCardsByName = (name: string, cards: Card[]) => {
+    const { hand, played } = cards
+        .filter((i) => i.name === name)
+        .reduce((acc, { state }) => {
+            acc[state] += 1
+            return acc;
+        }, { hand: 0, played: 0 })
+
+    return { hand, played };
+}
+
 // cache this calculation which is used by both sharks and swimmers
-let sharksAndSwimmers: null | number[] = null;
+let sharksAndSwimmers: null | { hand: number, played: number }[] = null;
 
 const getSharksAndSwimmers = (cards: Card[]) => {
     if (sharksAndSwimmers === null) {
-        const [shark_hand, shark_played, swimmer_hand, swimmer_played] = ['shark', 'swimmer'].flatMap(
-            (i) => {
-                const { hand, played } = cards
-                    .filter(({ name }) => name === i)
-                    .reduce((accumulator, { state }) => {
-                            accumulator[state] += 1
-                            return accumulator;
-                        }, { hand: 0, played: 0 }
-                    )
+        const [shark, swimmer] = ['shark', 'swimmer'].map(
+            (name) => {
+                const { hand, played } = getCardsByName(name, cards)
 
-                return [
-                    hand,
-                    played,
-                ]
+                return { hand, played };
             }
         )
 
-        sharksAndSwimmers = [shark_hand, shark_played, swimmer_hand, swimmer_played]
+        sharksAndSwimmers = [shark, swimmer]
     }
 
     return sharksAndSwimmers;
@@ -89,7 +97,6 @@ const getColorFrequency = (cards: Card[]) => cards
 
 const parse_csv: (filename: string, state: 'hand' | 'played') => Card[] = (filename, state) => readFileSync(filename)
     .toString()
-    .trimEnd()
     .split('\n')
     .reduce((accumulator, currentValue) => {
         if (currentValue === '' || currentValue === undefined) {
@@ -102,87 +109,80 @@ const parse_csv: (filename: string, state: 'hand' | 'played') => Card[] = (filen
         const { value: name } = getByLevenshteinDistance(_name, card_names);
         const { value: color } = getByLevenshteinDistance(_color, colors);
 
-        accumulator.push({ name, color, state });
+        const card = { name, color, state }
+        accumulator.push(card);
         return accumulator;
     }, [] as Card[])
+
+const evalDuoCard: EvalDuoCard = (name, effect) => (cards) => {
+    let points = 0;
+    const effects = [];
+
+    // count cards of this type across hand, played
+    const { hand, played } = getCardsByName(name, cards)
+
+    if (Math.floor(hand / 2)) {
+        effects.push(effect)
+    }
+
+    points += Math.floor((hand + played) / 2)
+
+    return { points, effects };
+}
+
+const evalCollectorCard: EvalCollectorCard = (name, scaling) => (cards) => {
+    const total = cards.filter((i) => i.name === name).length;
+    const points = scaling.at(total - 1) || 0
+
+    return { points, effects: [] }
+}
+
+const evalPointMultiplierCard: EvalPointMultiplierCard = (name, factor) => (cards) => {
+    const total = cards.filter((i) => i.name === name).length;
+    const points = (total * factor);
+
+    return { points, effects: [] }
+}
 
 const card_types: CardTypes = {
     // Duo cards
     crab: {
-        eval: (cards) => {
-            let points = 0;
-            const effects = [];
-
-            const { hand, played } = cards.filter(({ name }) => name === 'crab').reduce((acc, { state }) => {
-                acc[state] += 1
-                return acc;
-            }, { hand: 0, played: 0 })
-
-            if (Math.floor(hand / 2)) {
-                effects.push('[If they play 2 crab cards] The player chooses a discard pile, consults it without shuffling it, and chooses a card from it to add to their hand. They do not have to show it to the other players')
-            }
-
-            points += Math.floor((hand + played) / 2)
-
-            return { points, effects };
-        }
+        eval: evalDuoCard(
+            'crab',
+            '[If they play 2 crab cards] The player chooses a discard pile, consults it without shuffling it, and chooses a card from it to add to their hand. They do not have to show it to the other players'
+        ),
     },
 
     boat: {
-        eval: (cards) => {
-            let points = 0;
-            const effects = [];
-
-            const { hand, played } = cards.filter(({ name }) => name === 'boat').reduce((acc, { state }) => {
-                acc[state] += 1
-                return acc;
-            }, { hand: 0, played: 0 })
-
-            if (Math.floor(hand / 2)) {
-                effects.push('[If they play 2 boat cards] The player immediately takes another turn')
-            }
-
-            points += Math.floor((hand + played) / 2)
-
-            return { points, effects };
-        },
+        eval: evalDuoCard(
+            'boat',
+            '[If they play 2 boat cards] The player immediately takes another turn'
+        )
     },
 
     fish: {
-        eval: (cards) => {
-            let points = 0;
-            const effects = [];
-
-            const { hand, played } = cards.filter(({ name }) => name === 'fish').reduce((acc, { state }) => {
-                acc[state] += 1
-                return acc;
-            }, { hand: 0, played: 0 })
-
-            if (Math.floor(hand / 2)) {
-                effects.push('[If they play 2 fish cards] The player adds the top card from the deck to their hand.')
-            }
-
-            points += Math.floor((hand + played) / 2)
-
-            return { points, effects };
-        }
+        eval: evalDuoCard(
+            'fish',
+            '[If they play 2 fish cards] The player adds the top card from the deck to their hand.'
+            )
     },
 
+    // Shark/Swimmer Duo Card - Special Case
     // complement of shark
     swimmer: {
         eval: (cards) => {
             let points = 0;
             const effects = [];
 
-            const [shark_hand, shark_played, swimmer_hand, swimmer_played] = getSharksAndSwimmers(cards);
+            const [shark, swimmer] = getSharksAndSwimmers(cards);
 
 
-            if (shark_hand >= 1 && swimmer_hand >= 1) {
+            if (shark.hand >= 1 && swimmer.hand >= 1) {
                 effects.push('[If they play a pair of shark, swimmer cards] The player steals a random card from another player and adds it to their hand.')
             }
 
             // the greatest number of pairs you can form is limited by the less frequent of the 2 card types
-            const num_pairs = Math.min((shark_hand + shark_played), (swimmer_hand + swimmer_played))
+            const num_pairs = Math.min((shark.hand + shark.played), (swimmer.hand + swimmer.played))
 
             // add half of the pairs from this card type, expecting that half of the pairs will be added from the other card type
             points += num_pairs / 2;
@@ -197,15 +197,15 @@ const card_types: CardTypes = {
             let points = 0;
             const effects = [];
 
-            const [shark_hand, shark_played, swimmer_hand, swimmer_played] = getSharksAndSwimmers(cards);
+            const [shark, swimmer] = getSharksAndSwimmers(cards);
 
 
-            if (shark_hand >= 1 && swimmer_hand >= 1) {
+            if (shark.hand >= 1 && swimmer.hand >= 1) {
                 effects.push('[If they play a pair of shark, swimmer cards] The player steals a random card from another player and adds it to their hand.')
             }
 
             // the greatest number of pairs you can form is limited by the less frequent of the 2 card types
-            const num_pairs = Math.min((shark_hand + shark_played), (swimmer_hand + swimmer_played))
+            const num_pairs = Math.min((shark.hand + shark.played), (swimmer.hand + swimmer.played))
 
             // add half of the pairs from this card type, expecting that half of the pairs will be added from the other card type
             points += num_pairs / 2;
@@ -270,89 +270,65 @@ const card_types: CardTypes = {
 
     // Collector Cards
     shell: {
-        eval: (cards) => {
-             const scaling = [0, 2, 4, 6, 8, 10]
-             const total = cards.filter(({ name }) => name === 'shell').length;
-             const points = scaling.at(total - 1) || 0
-
-            return { points, effects: [] }
-        }
+        eval: evalCollectorCard(
+            'shell',
+            [0, 2, 4, 6, 8, 10]
+        ),
     },
 
     octopus: {
-        eval: (cards) => {
-            const scaling = [0, 3, 6, 9, 12]
-            const total = cards.filter(({ name }) => name === 'octopus').length;
-            const points = scaling.at(total - 1) || 0
-
-            return { points, effects: [] }
-        }
+        eval: evalCollectorCard(
+            'octopus',
+            [0, 3, 6, 9, 12]
+        ),
     },
 
     penguin: {
-        eval: (cards) => {
-            const scaling =  [1, 3, 5]
-            const total = cards.filter(({ name }) => name === 'penguin').length;
-            const points = scaling.at(total - 1) || 0
-
-            return { points, effects: [] }
-        }
+        eval: evalCollectorCard(
+            'penguin',
+            [1, 3, 5]
+        )
     },
 
     sailor: {
-        eval: (cards) => {
-            const scaling = [0, 5]
-            const total = cards.filter(({ name }) => name === 'sailor').length;
-            const points = scaling.at(total - 1) || 0
-
-            return { points, effects: [] }
-        }
+        eval: evalCollectorCard(
+            'sailor',
+            [0, 5]
+        )
     },
 
     // Point Multiplier Cards
     // 1 point per boat
     lighthouse: {
-        eval: (cards) => {
-            const factor = 1
-            const total = cards.filter(({ name }) => name === 'boat').length;
-            const points = (total * factor);
-
-            return { points, effects: [] }
-        }
+        eval: evalPointMultiplierCard(
+            'boat',
+            1
+        )
     },
 
     // 1 point per fish
     'shoal of fish': {
-        eval: (cards) => {
-            const factor = 1
-            const total = cards.filter(({ name }) => name === 'fish').length;
-            const points = (total * factor);
-
-            return { points, effects: [] }
-        }
+        eval: evalPointMultiplierCard(
+            'fish',
+            1
+        )
     },
 
     // 2 points per penguin
     'penguin colony': {
-        eval: (cards) => {
-            const factor = 2
-            const total = cards.filter(({ name }) => name === 'penguin').length;
-            const points = (total * factor);
-
-            return { points, effects: [] }
-        }
+        eval: evalPointMultiplierCard(
+            'penguin',
+            2
+        )
     },
 
     // 3 points per sailor
     'captain': {
-        eval: (cards) => {
-            const factor = 3
-            const total = cards.filter(({ name }) => name === 'sailor').length;
-            const points = (total * factor);
-
-            return { points, effects: [] }
-        }
-    },
+        eval: evalPointMultiplierCard(
+            'sailor',
+            3
+        )
+    }
 }
 
 

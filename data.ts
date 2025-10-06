@@ -15,33 +15,17 @@ export const card_names = [
     'captain'
 ] as const;
 
-// TODO: game instructions use different naming than ColorADD site - pick a source of truth
+// this is a subset of the ColorADD spectrum: https://www.coloradd.net/en/coloradd-code/
 export const colors = [
-    'white',
-    'black',
-    'red',
-    'light red',
-    'dark red',
-    'yellow',
-    'light yellow',
-    'dark yellow',
-    'blue',
-    'light blue',
     'dark blue',
-    'orange',
-    'light orange',
-    'dark orange',
-    'green',
+    'light blue',
+    'black',
+    'yellow',
     'light green',
-    'dark green',
-    'brown',
-    'light brown',
-    'dark brown',
-    'violet',
-    'light violet',
-    'dark violet',
-    'gray',
-    'dark gray',
-    'silver',
-    'gold',
+    'white',
+    'purple',
+    'light grey',
+    'light orange',
+    'light pink',
+    'orange'
 ] as const;
